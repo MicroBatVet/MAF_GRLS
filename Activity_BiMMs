@@ -1,0 +1,777 @@
+#Only Year 3 - 7 data processing is shown.  Year 0-7 model was not included here.
+#Load required libraries
+
+library(readxl)
+library(data.table)
+library(mltools)
+library(dplyr)
+library(caret)
+library(pROC)
+
+#Load cleaned activity data
+activity_neoplasia <- read_excel("~/filepath/filename.xlsx", 
+                                         col_types = c("text", "numeric", "text", 
+                                                       "text", "text", "text", "text", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "text", "numeric", 
+                                                       "text", "text", "text", "text", "text", 
+                                                       "text", "text", "text", "text", "numeric", 
+                                                       "text", "text", "text", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "text", "text", "text", "numeric", 
+                                                       "numeric", "numeric", "text", "skip", 
+                                                       "skip", "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric", "numeric", 
+                                                       "numeric", "numeric"))
+View(activity_neoplasia)
+
+#Load dog profile info
+dog_profile <- read.csv("~/filepath/dog_profile.csv")
+
+
+#Merge dog profile
+activity_neoplasia1 <- merge(x = dog_profile,
+                          y = activity_neoplasia,
+                          by = 'subject_id',
+                          all = TRUE)
+
+#We need to split and ask questions by years because the survey changed over time
+#First convert all appropriate columns to numerics
+
+activity_neoplasia_num <- activity_neoplasia1 %>%
+  mutate(frequency = case_when(frequency == 'Never' ~ 0,
+                               frequency == 'Rarely' ~ 1,
+                               frequency == 'Less than once/month' ~ 2,
+                               frequency == 'Occasionally' ~ 3,
+                               frequency == 'Monthly' ~ 4,
+                               frequency == 'Less than once/week' ~ 5,
+                               frequency == 'Once or twice/week' ~ 6,
+                               frequency == 'Weekly' ~ 6,
+                               frequency == 'Frequently' ~ 7,
+                               frequency == 'Once/day' ~ 8,
+                               frequency == 'Daily' ~ 8,
+                               frequency == 'More than daily' ~9,
+                               frequency == 'More than once a day' ~ 9),
+         duration = case_when(duration == 'Less than 10 minutes' ~ 1,
+                              duration == '10-30 minutes' ~ 2,
+                              duration == '30-60 minutes' ~3,
+                              duration == '31-60 minutes' ~3,
+                              duration == 'Greater than 60 minutes' ~4,
+                              duration == 'unknown' ~ 0.001),  #just temp value as need to filter out since survey did not ask this info.
+         pace = case_when(pace == 'Never' ~ 0,  #those with never as frequency should be 0.  
+                          pace == "Slow" ~ 1,
+                          pace == "Slow walk" ~ 1,
+                          pace == "Average" ~ 2,
+                          pace == "Average walk" ~ 2,
+                          pace == "Brisk" ~ 3,
+                          pace == "Brisk walk" ~ 3,
+                          pace == "Jog" ~ 4,
+                          pace == "Run" ~ 5,
+                          pace == "unknown" ~ 0.001), #just temp value as need to filter out since survey did not ask this info.
+         grade = case_when(grade == "Flat" ~ 1,
+                           grade == "Moderate" ~ 2,
+                           grade == "Steep" ~ 3,
+                           grade == "unkown" ~ 0.001),  #temp value as need to filter out since survey did not ask for this information
+         activity_level = case_when(activity_level == "None" ~ 0,
+                                    activity_level == "Little" ~ 1,
+                                    activity_level == "Moderate" ~ 2,
+                                    activity_level == "Very active" ~ 3),  
+         swim_cold_frequency = case_when(swim_cold_frequency == 'Never' ~ 0,
+                                         swim_cold_frequency == 'Rarely' ~ 1,
+                                         swim_cold_frequency == 'rarely' ~ 1,
+                                         swim_cold_frequency == 'monthly' ~ 2,
+                                         swim_cold_frequency == 'Monthly' ~ 2,
+                                         swim_cold_frequency == 'Weekly' ~ 3,
+                                         swim_cold_frequency == 'weekly' ~ 3,
+                                         swim_cold_frequency == 'daily' ~ 4,
+                                         swim_cold_frequency == 'Daily' ~ 4,
+                                         swim_cold_frequency == 'More than daily' ~5),
+         swim_warm_frequency = case_when(swim_warm_frequency == 'Never' ~ 0,
+                                         swim_warm_frequency == 'Rarely' ~ 1,
+                                         swim_warm_frequency == 'rarely' ~ 1,
+                                         swim_warm_frequency == 'monthly' ~ 2,
+                                         swim_warm_frequency == 'Monthly' ~ 2,
+                                         swim_warm_frequency == 'Weekly' ~ 3,
+                                         swim_warm_frequency == 'weekly' ~ 3,
+                                         swim_warm_frequency == 'daily' ~ 4,
+                                         swim_warm_frequency == 'Daily' ~ 4,
+                                         swim_warm_frequency == 'More than daily' ~5),
+         sun_exposure_duration = case_when(sun_exposure_duration == "Less than 3 hours" ~1, 
+                                           sun_exposure_duration == "Between 3-8 hours" ~2,
+                                           sun_exposure_duration == "Between 8-16 hours" ~3,
+                                           sun_exposure_duration == "Between 9-16 hours" ~3,
+                                           sun_exposure_duration == "More than 16 hours" ~4),
+         sun_exposure_shade_access = case_when(sun_exposure_shade_access == "Access to full shade" ~ 0,
+                                               sun_exposure_shade_access == "No access to full shade" ~ 1)  #means in sun more so higher ranking
+         
+  )
+
+#One hot encode
+activity_neoplasia_num$activity <- as.factor(activity_neoplasia$activity)  #ensure is factor before one-hot encode
+
+act_neo_num_one_hot <- one_hot(as.data.table(activity_neoplasia_num), cols = "activity", sparsifyNAs = FALSE, naCols = FALSE, dropCols = TRUE, dropUnusedLevels = FALSE)
+View(act_neo_num_one_hot)
+
+act_neo_num_one_hot <- as.data.frame(act_neo_num_one_hot)
+
+act_neo_num_one_hot$subject_id <- as.factor(act_neo_num_one_hot$subject_id)  #ensure factor for MICE
+act_neo_num_one_hot$sex_status <- as.factor(act_neo_num_one_hot$sex_status) #ensure factor for MICE
+
+#Ready to perform MICE.  Will need to do two rounds.  Do all but duration, surface, pace, and grade and then do those for years 3-7 only.
+#Pull out columns for all years first.
+yr0_7 <- act_neo_num_one_hot[,c(1:2,5:6,8:16,28:29,37:38,41:51,54)]
+str(yr0_7)
+
+#Pull out columns for years 3-7.
+yr3_7 <- act_neo_num_one_hot[,c(1:2,5:6,8:25,28:30,35,37:38,41:51,54)]
+yr3_7 <- subset(yr3_7, year_in_study == 3 | year_in_study == 4 |year_in_study == 5 | year_in_study == 6 | year_in_study == 7)
+str(yr3_7)
+
+#Run mice in parallel processing, use future mice in the mice package
+library(mice)
+
+#Import mice matrix
+matrix1 <- read_excel("~/location/filename.xlsx")
+matrix1 <- as.data.frame(matrix1)
+#Need to drop first row that was assigned a new name.  PLUS it is important to rename each row with column names
+rownames(matrix1) <- matrix1$...1
+drops <- c("...1")
+matrix1 <- matrix1[ , !names(matrix1) %in% drops]
+head(matrix1)  #check that it looks good.
+matrix1 <- as.matrix(matrix1)
+
+#Run mice algorithm
+data_yr3_7 <- mice(yr3_7, m=5, predictorMatrix = matrix1, maxit = 0) #get method, make sure maxit is 0
+method <- data_yr3_7$method
+print(method)  #recognizes NAs in data
+
+
+#Change all to rf and ensure, duration, surface, pace, grade are empty.
+method[c(5:23, 25:27, 29,34:36)] <- "rf"  #any variable type accepted
+print(method)
+
+#20 cores available for MICE.
+data_yr3_7 <- futuremice(yr3_7, m=5, parallelseed = 4724, n.core = 5, maxit = 30, predictorMatrix = matrix1, method = method)
+
+save.image(file='futuremice3_7.RData')
+
+complete_yr3_7 <- complete(data_yr3_7, action = "long")
+str(complete_yr3_7)
+
+#write_xlsx(complete_yr3_7, path = "~/location/filename.xlsx",
+#           col_names = TRUE, use_zip64 = FALSE)
+
+#Verify 
+colSums(is.na(complete_yr3_7))  #Source has a few NAs as it wasn't a column we ran in mice.
+complete_yr3_7$source[is.na(complete_yr3_7$source)] <- 0.5
+
+
+#all the columns we expect to contain missing data are containing missing data vs the others are not
+#Now look at the ouput
+stripplot(complete_numyr3_7, pch = 20, cex = 1.2, ~swim_warm_frequency | .imp) #not helpful view, use densityplot()
+densityplot(data_yr3_7, ~activity_level | .imp)
+densityplot(data_yr3_7, ~swim_warm_frequency | .imp)
+densityplot(data_yr3_7, ~swim_cold_frequency | .imp)
+plot(data_yr3_7)
+
+#SMOTE
+library(RSBID)
+#library(themis)
+
+target_variable <- "any"  
+target_column <- ".imp"  #for subsetting
+
+# Get unique values in the target column
+unique_values <- unique(complete_yr3_7[[target_column]])  #use instead of typing number in case change dataset numbers
+
+# Initialize a list to store SMOTE results for each subset
+smote_results <- list()
+
+# Iterate over each unique value in the target column
+for (value in unique_values) {
+  # Subset the dataset based on the current unique value
+  subset_data <- complete_yr3_7[complete_yr3_7[[target_column]] == value, ]
+  
+  # Perform SMOTE on the subset
+  smote_data <- SMOTE_NC(data=complete_yr3_7, outcome="any", perc_maj = 100, k = 2)  #smotenc(df, var, k = 5, over_ratio = 1)
+  
+  # Store SMOTE result in the list
+  smote_results[[length(smote_results) + 1]] <- smote_data
+}
+
+# Combine SMOTE results from all subsets
+#Performed above with different K values.  K=7 did best
+golden <- do.call(rbind, smote_results) #k = 7
+
+#Ensure years and frequency are whole and integers
+golden_df <- golden %>%
+  mutate_if(is.numeric, round, digits = 0)
+
+#merge dog profile now with age calculated
+dog_profile <- dog_profile %>%
+  mutate(birth_date = ymd(paste0(birth_date, "-01")),
+         enrolled_date = ymd(paste0(enrolled_date, "-01")))
+
+age <- dog_profile[,4] - dog_profile[,3]
+age <- age/365
+
+dog_profile$age <-as.numeric(age)
+str(dog_profile)
+
+ID_age <- dog_profile[,c(1,5)]
+
+golden_df <- merge(x = ID_age,
+              y = golden_df,
+              by = 'subject_id',
+              all.y = TRUE)
+
+golden_df$yrs_old <- golden_df$age + golden_df$year_in_study
+
+#with SMOTE BIMM
+df1 <- subset(golden_df, .imp == 1)
+df2 <- subset(golden_df, .imp == 2)
+df3 <- subset(golden_df, .imp == 3)
+df4 <- subset(golden_df, .imp == 4)
+df5 <- subset(golden_df, .imp == 5)
+
+# Standardize numeric columns
+process <- preProcess(df1, method = c("range"))
+scaled <- predict(process, df1)
+df1 <- scaled
+
+process <- preProcess(df2, method = c("range"))
+scaled <- predict(process, df2)
+df2 <- scaled
+
+process <- preProcess(df3, method = c("range"))
+scaled <- predict(process, df3)
+df3 <- scaled
+
+process <- preProcess(df4, method = c("range"))
+scaled <- predict(process, df4)
+df4 <- scaled
+
+process <- preProcess(df5, method = c("range"))
+scaled <- predict(process, df5)
+df5 <- scaled
+
+#To see how many dogs have cancer vs not cancer use subset() then change subject_id to a factor and use the unique ()
+index_train1 <- sample(unique(df1$subject_id[df1$any == 1]), size = 136)  #3,044 unique subject ids, we have 272 dogs with cancer
+index_train2 <- sample(unique(df1$subject_id[df1$any == 0]), size = 1386)  #136 and 1386
+index_train <- c(index_train1, index_train2) #60% of dogs with and without cancer for index
+
+data_train1 <- df1[df1$subject_id %in% index_train, ] #select dogs from DF1 and keep those same dogs for the repeated models.
+
+data_test1 <- df1[!(df1$subject_id %in% index_train), ] 
+
+
+data_train2 <- df2[df2$subject_id %in% index_train, ]  
+
+data_test2 <- df2[!(df2$subject_id %in% index_train), ] 
+
+data_train3 <- df3[df3$subject_id %in% index_train, ]
+
+data_test3 <- df3[!(df3$subject_id %in% index_train), ] 
+
+data_train4 <- df4[df4$subject_id %in% index_train, ]
+
+data_test4 <- df4[!(df4$subject_id %in% index_train), ] 
+
+data_train5 <- df5[df5$subject_id %in% index_train, ]
+
+data_test5 <- df5[!(df5$subject_id %in% index_train), ] 
+
+#Run initial models:
+#Code for BiMM obtained from Dr. Jaime Speiser
+#required packages
+#Code for implementing BiMM forest with feature selection
+#Paper by: Jaime Speiser (email: jspeiser@wakehealth.edu)
+#Journal article in the Journal of Biomedical Informatics
+
+#notes: outcome must be binary with values of 0 and 1 (factor variable)
+#bimm forest requires complete data (no missing predictors or outcome)
+
+#required packages
+library(blme)
+library(rpart)
+library(randomForest)
+library(VSURF)
+library(varSelRF)
+
+#function inputs:
+####formula: the formula for the outcome and fixed predictors
+####random: the random effect variable
+####traindata: the dataset used for developing the model
+####seed: choose a number for the seed so that the random forest procudes the same model every time
+####method: choose "1iter", "h1", "h2", or "h3" for the updating function
+####h1c and h2c: parameters for h1 and h2 update cutoffs
+####ErrorTolerance: specify the difference in the posterior log likelihood deemed to be converged/when the algorithm stops
+####MaxIterations: maximum number of iterations the method should complete before quitting, to prevent infinite loops
+####verbose: include output throughout iterations? TRUE or FALSE
+####varsel: type of variable selection: choose "NA" for none, "VSURF" or "varSelRF"
+
+#function outputs:
+####Forest: the random forest model portion of the BiMM forest, used for predicting independent observations
+####EffectModel: the GLMM portion of the BiMM forest, used for predicting new observations of clusters included in the training data
+####Iterations: how many iterations were used in the BiMM forest if an updating function is specified
+####PostLogLike: posterior log likelihood of the final BiMM forest GLMM
+####returndata: returns the dataset used to develop the model
+
+bimmForest<-function(formula,random,traindata,seed=8636,method="1iter",h1c=0.5,h2c=1.5,ErrorTolerance=0.001,MaxIterations=100000,verbose=TRUE){
+  #rename the dataset
+  data=traindata
+  #parse formula
+  Predictors<-paste(attr(terms(formula),"term.labels"),collapse="+")
+  TargetName<-formula[[2]]
+  Target<-data[,toString(TargetName)]
+  initialRandomEffects=rep(0,length(data[,1]))
+  #set up variables for loop
+  ContinueCondition<-TRUE
+  iterations<-0
+  #initial values
+  AdjustedTarget<-as.numeric(Target)-initialRandomEffects
+  oldlik<- -Inf
+  # Make a new data frame to include all the new variables
+  newdata <- data
+  
+  while(ContinueCondition){
+    # Current values of variables
+    newdata[,"AdjustedTarget"] <- AdjustedTarget
+    iterations <- iterations+1
+    #build forest
+    set.seed(seed)
+    forest <- randomForest(formula(paste(c("factor(AdjustedTarget)", Predictors),collapse = "~")), 
+                           data = data, method = "class")
+    forestprob<-predict(forest,type="prob")[,2]
+    if(verbose){
+      print(paste(c("Iteration:",iterations)))
+      print(forest)
+    }
+    ## Estimate New Random Effects and Errors using BLMER
+    options(warn=-1)
+    lmefit <- tryCatch(bglmer(formula(c(paste(paste(c("factor(AdjustedTarget)","forestprob"), collapse="~"), "+(1|random)",sep=""))), 
+                              data=data,family=binomial,control=glmerControl(optCtrl=list(maxfun=20000))),error=function(cond)"skip")
+    if(verbose){
+      print(paste(c("Iteration:",iterations)))
+      print(lmefit)
+    }
+    # Get the likelihood to check on convergence
+    if(!(class(lmefit)[1]=="character")){
+      newlik <- logLik(lmefit)
+      ContinueCondition <- (abs(newlik-oldlik)>ErrorTolerance & iterations < MaxIterations)
+      oldlik <- newlik
+      # Extract random effects to make the new adjusted target
+      logit<-forestprob 
+      logit2<-exp(predict(lmefit))/(1+exp(predict(lmefit))) 
+      AllEffects <- logit2
+      #1 iteration, ignore adjusted target
+      if(method=="1iter") {
+        ContinueCondition<-FALSE
+      }
+      if(method=="h1"){
+        AdjustedTarget <- ifelse(as.numeric(AdjustedTarget) + AllEffects-1>h1c,1,0)
+      }
+      if(method=="h2"){
+        AdjustedTarget <- ifelse(as.numeric(AdjustedTarget) + AllEffects-1<h2c,0,1)
+      }
+      if(method=="h3"){
+        for(k in 1:length(AllEffects)){
+          if(as.numeric(Target[k])+AllEffects[k]-1<.5){AdjustedTarget[k]=0}
+          else if(as.numeric(Target[k])+AllEffects[k]-1>1.5){AdjustedTarget[k]=1}
+          else{
+            #generate random probability coin flip based on AllEffects (q notation in paper)
+            AdjustedTarget[k]<-rbinom(1,1,AllEffects[k])
+          }
+        }
+      }
+      #check to see if updated outcomes are the same, if so get out of loop
+      if(min(AdjustedTarget)==max(AdjustedTarget)){
+        ContinueCondition<-FALSE 
+        shouldpredict=FALSE
+        print("Error: updates are all for one group")
+      }
+    }
+    if((class(lmefit)[1]=="character")){
+      ContinueCondition<-FALSE 
+      print("Error: Bayesian GLMM did not converge")
+    }
+  }
+  
+  #return stuff
+  return(list(Forest=forest,EffectModel=lmefit,Iterations=iterations,PostLogLike=logLik(lmefit),returndata=data))   
+  
+}
+#bimmForest<-function(formula,random,traindata,seed=8636,method="1iter",h1c=0.5,h2c=1.5,ErrorTolerance=0.5,MaxIterations=100,verbose=FALSE,varsel="NA"){
+#rename the dataset
+
+#Beging developing models for the first imputation dataset
+model_all <- bimmForest(any ~ year_in_study + frequency + activity_Active_indoor_play + activity_Agility_training_drills + activity_fetch +
+                          activity_Fetch_outside___air_retrieval + activity_Fetch_outside___ground_retrieval + activity_Off_leash__obedience_training_walking_or_running +
+                          activity_On_leash__obedience_training_walking_or_running + activity_Other_Specify + duration + surface_asphalt +
+                          surface_concrete + surface_dirt + surface_grass + surface_rocky + surface_sand + surface_varied + surface_other + total_time +
+                          pace + grade + activity_level + swim + swim_cold_frequency + swim_location_pool + swim_location_pond_lake + swim_location_river_stream_ditch +
+                          swim_location_ocean + swim_warm_frequency + sun_exposure_duration + sun_exposure_shade_access + sun_exposure_concrete + sun_exposure_dirt,
+                        random = as.factor(data_train1$subject_id), traindata = data_train1, seed = 1246, method="1iter")
+
+pred1 <- predict(model_all$Forest, newdata=data_test1)
+model_all_results <- confusionMatrix(data=pred1, reference = as.factor(data_test1$any))
+model_all_results
+plot(model_all$Forest)
+varImpPlot(model_all$Forest)
+varImp(model_all$Forest)
+
+roc_object <- roc(data_test1$any, as.numeric(pred1))
+auc(roc_object)
+plot(roc_object)
+#varImp(model_all$Forest)
+
+model_all2 <- bimmForest(any ~ year_in_study + frequency + activity_Active_indoor_play + activity_Agility_training_drills + activity_fetch +
+                          activity_Fetch_outside___air_retrieval + activity_Fetch_outside___ground_retrieval + activity_Off_leash__obedience_training_walking_or_running +
+                          activity_On_leash__obedience_training_walking_or_running + activity_Other_Specify + duration + surface_asphalt +
+                          surface_concrete + surface_dirt + surface_grass + surface_rocky + surface_sand + surface_varied + surface_other + total_time +
+                          pace + grade + activity_level + swim + swim_cold_frequency + swim_location_pool + swim_location_pond_lake + swim_location_river_stream_ditch +
+                          swim_location_ocean + swim_warm_frequency + sun_exposure_duration + sun_exposure_shade_access + sun_exposure_concrete + sun_exposure_dirt,
+                        random = as.factor(data_train2$subject_id), traindata = data_train2, seed = 2246, method="1iter")
+
+pred2 <- predict(model_all2$Forest, newdata=data_test2)
+model_all_results2 <- confusionMatrix(data=pred2, reference = as.factor(data_test2$any))
+model_all_results2
+plot(model_all2$Forest)
+varImpPlot(model_all2$Forest)
+varImp(model_all2$Forest)
+
+roc_object2 <- roc(data_test2$any, as.numeric(pred2))
+auc(roc_object2)
+plot(roc_object2)
+
+
+model_all3 <- bimmForest(any ~ year_in_study + frequency + activity_Active_indoor_play + activity_Agility_training_drills + activity_fetch +
+                           activity_Fetch_outside___air_retrieval + activity_Fetch_outside___ground_retrieval + activity_Off_leash__obedience_training_walking_or_running +
+                           activity_On_leash__obedience_training_walking_or_running + activity_Other_Specify + duration + surface_asphalt +
+                           surface_concrete + surface_dirt + surface_grass + surface_rocky + surface_sand + surface_varied + surface_other + total_time +
+                           pace + grade + activity_level + swim + swim_cold_frequency + swim_location_pool + swim_location_pond_lake + swim_location_river_stream_ditch +
+                           swim_location_ocean + swim_warm_frequency + sun_exposure_duration + sun_exposure_shade_access + sun_exposure_concrete + sun_exposure_dirt,
+                         random = as.factor(data_train3$subject_id), traindata = data_train3, seed = 3346, method="H3")
+
+pred3 <- predict(model_all3$Forest, newdata=data_test3)
+model_all_results3 <- confusionMatrix(data=pred3, reference = as.factor(data_test3$any))
+model_all_results3
+plot(model_all3$Forest)
+varImpPlot(model_all3$Forest)
+varImp(model_all3$Forest)
+roc_object3 <- roc(data_test3$any, as.numeric(pred3))
+auc(roc_object3)
+plot(roc_object3)
+
+
+model_all4 <- bimmForest(any ~ year_in_study + frequency + activity_Active_indoor_play + activity_Agility_training_drills + activity_fetch +
+                           activity_Fetch_outside___air_retrieval + activity_Fetch_outside___ground_retrieval + activity_Off_leash__obedience_training_walking_or_running +
+                           activity_On_leash__obedience_training_walking_or_running + activity_Other_Specify + duration + surface_asphalt +
+                           surface_concrete + surface_dirt + surface_grass + surface_rocky + surface_sand + surface_varied + surface_other + total_time +
+                           pace + grade + activity_level + swim + swim_cold_frequency + swim_location_pool + swim_location_pond_lake + swim_location_river_stream_ditch +
+                           swim_location_ocean + swim_warm_frequency + sun_exposure_duration + sun_exposure_shade_access + sun_exposure_concrete + sun_exposure_dirt,
+                         random = as.factor(data_train4$subject_id), traindata = data_train4, seed = 4446, method="H3")
+
+pred4 <- predict(model_all4$Forest, newdata=data_test4)
+model_all_results4 <- confusionMatrix(data=pred4, reference = as.factor(data_test4$any))
+model_all_results4
+plot(model_all4$Forest)
+varImpPlot(model_all4$Forest)
+varImp(model_all4$Forest)
+roc_object4 <- roc(data_test4$any, as.numeric(pred4))
+auc(roc_object4)
+plot(roc_object4)
+
+model_all5 <- bimmForest(any ~ year_in_study + frequency + activity_Active_indoor_play + activity_Agility_training_drills + activity_fetch +
+                           activity_Fetch_outside___air_retrieval + activity_Fetch_outside___ground_retrieval + activity_Off_leash__obedience_training_walking_or_running +
+                           activity_On_leash__obedience_training_walking_or_running + activity_Other_Specify + duration + surface_asphalt +
+                           surface_concrete + surface_dirt + surface_grass + surface_rocky + surface_sand + surface_varied + surface_other + total_time +
+                           pace + grade + activity_level + swim + swim_cold_frequency + swim_location_pool + swim_location_pond_lake + swim_location_river_stream_ditch +
+                           swim_location_ocean + swim_warm_frequency + sun_exposure_duration + sun_exposure_shade_access + sun_exposure_concrete + sun_exposure_dirt,
+                         random = as.factor(data_train5$subject_id), traindata = data_train5, seed = 5556, method="H3")
+
+pred5 <- predict(model_all5$Forest, newdata=data_test5)
+model_all_results5 <- confusionMatrix(data=pred5, reference = as.factor(data_test5$any))
+model_all_results5
+plot(model_all5$Forest)
+varImpPlot(model_all5$Forest)
+varImp(model_all5$Forest)
+roc_object5 <- roc(data_test5$any, as.numeric(pred5))
+auc(roc_object5)
+plot(roc_object5)
+
+#Summary data (table data)
+average_pace <- complete_yr3_7 %>%
+  group_by(year_in_study, any) %>%
+  summarise(avg_frequency = mean(pace, na.rm = TRUE),
+            std_dev = sd(pace, na.rm=TRUE),
+            med_freq = median(pace, na.rm= TRUE),
+            min = min(pace, na.rm = TRUE),
+            max = max(pace, na.rm=TRUE))
+average_pace
+
+average_duration <- complete_yr3_7 %>%
+  group_by(year_in_study, any) %>%
+  summarise(avg_duration = mean(duration, na.rm = TRUE),
+            std_dev = sd(duration, na.rm=TRUE),
+            med_duration = median(duration, na.rm= TRUE),
+            min = min(duration, na.rm = TRUE),
+            max = max(duration, na.rm=TRUE))
+average_duration
+
+
+cancer3	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr3subjects)
+average_pace3	<-	cancer3	%>%			
+  #filter(year_in_study	<	3)	%>%		
+  group_by(year_in_study)	%>%				
+  summarise(avg_pace	=	mean(pace,	na.rm	=	TRUE),
+            std_dev	=	sd(pace,	na.rm=TRUE),		
+            med_freq	=	median(pace,	na.rm=	TRUE),	
+            min	=	min(pace,	na.rm	=	TRUE),
+            max	=	max(pace,	na.rm=TRUE))		
+average_pace3						
+
+
+cancer4	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr4subjects)
+average_pace4	<-	cancer4	%>%			
+  #filter(year_in_study	<	4)	%>%		
+  group_by(year_in_study)	%>%				
+  summarise(avg_pace	=	mean(pace,	na.rm	=	TRUE),
+            std_dev	=	sd(pace,	na.rm=TRUE),		
+            med_freq	=	median(pace,	na.rm=	TRUE),	
+            min	=	min(pace,	na.rm	=	TRUE),
+            max	=	max(pace,	na.rm=TRUE))		
+average_pace4						
+
+
+cancer5	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr5subjects)
+average_pace5	<-	cancer5	%>%			
+  #filter(year_in_study	<	5)	%>%		
+  group_by(year_in_study)	%>%				
+  summarise(avg_pace	=	mean(pace,	na.rm	=	TRUE),
+            std_dev	=	sd(pace,	na.rm=TRUE),		
+            med_freq	=	median(pace,	na.rm=	TRUE),	
+            min	=	min(pace,	na.rm	=	TRUE),
+            max	=	max(pace,	na.rm=TRUE))		
+average_pace5						
+
+
+
+cancer6	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr6subjects)
+average_pace6	<-	cancer6	%>%			
+  #filter(year_in_study	<	6)	%>%		
+  group_by(year_in_study,	any)	%>%			
+  summarise(avg_pace	=	mean(pace,	na.rm	=	TRUE),
+            std_dev	=	sd(pace,	na.rm=TRUE),		
+            med_freq	=	median(pace,	na.rm=	TRUE),	
+            min	=	min(pace,	na.rm	=	TRUE),
+            max	=	max(pace,	na.rm=TRUE))		
+average_pace6						
+
+
+cancer7	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr7subjects)
+average_pace7	<-	cancer7	%>%			
+  filter(year_in_study	<	7)	%>%		
+  group_by(year_in_study,	any)	%>%			
+  summarise(avg_pace	=	mean(pace,	na.rm	=	TRUE),
+            std_dev	=	sd(pace,	na.rm=TRUE),		
+            med_freq	=	median(pace,	na.rm=	TRUE),	
+            min	=	min(pace,	na.rm	=	TRUE),
+            max	=	max(pace,	na.rm=TRUE))		
+average_pace7						
+
+cancer3	<-	complete_yr3_77	%>%	filter(subject_id	%in%	yr3subjects)
+average_duration3	<-	cancer3	%>%			
+  #filter(year_in_study	<	3)	%>%		
+  group_by(year_in_study)	%>%				
+  summarise(avg_duration	=	mean(duration,	na.rm	=	TRUE),
+            std_dev	=	sd(duration,	na.rm=TRUE),		
+            med_freq	=	median(duration,	na.rm=	TRUE),	
+            min	=	min(duration,	na.rm	=	TRUE),
+            max	=	max(duration,	na.rm=TRUE))		
+average_duration3						
+
+
+cancer4	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr4subjects)
+average_duration4	<-	cancer4	%>%			
+  #filter(year_in_study	<	4)	%>%		
+  group_by(year_in_study)	%>%				
+  summarise(avg_duration	=	mean(duration,	na.rm	=	TRUE),
+            std_dev	=	sd(duration,	na.rm=TRUE),		
+            med_freq	=	median(duration,	na.rm=	TRUE),	
+            min	=	min(duration,	na.rm	=	TRUE),
+            max	=	max(duration,	na.rm=TRUE))		
+average_duration4				
+(3.08 - ((2.58+2.7+2.62)/3))/(3.08 + ((2.58+2.7+2.62)/3))
+
+cancer5	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr5subjects)
+average_duration5	<-	cancer5	%>%			
+  #filter(year_in_study	<	5)	%>%		
+  group_by(year_in_study)	%>%				
+  summarise(avg_duration	=	mean(duration,	na.rm	=	TRUE),
+            std_dev	=	sd(duration,	na.rm=TRUE),		
+            med_freq	=	median(duration,	na.rm=	TRUE),	
+            min	=	min(duration,	na.rm	=	TRUE),
+            max	=	max(duration,	na.rm=TRUE))		
+average_duration5		
+
+
+cancer6	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr6subjects)
+average_duration6	<-	cancer6	%>%			
+  #filter(year_in_study	<	6)	%>%		
+  group_by(year_in_study,	any)	%>%			
+  summarise(avg_duration	=	mean(duration,	na.rm	=	TRUE),
+            std_dev	=	sd(duration,	na.rm=TRUE),		
+            med_freq	=	median(duration,	na.rm=	TRUE),	
+            min	=	min(duration,	na.rm	=	TRUE),
+            max	=	max(duration,	na.rm=TRUE))		
+average_duration6						
+
+
+cancer7	<-	complete_yr3_7	%>%	filter(subject_id	%in%	yr7subjects)
+average_duration7	<-	cancer7	%>%			
+  filter(year_in_study	<	7)	%>%		
+  group_by(year_in_study,	any)	%>%			
+  summarise(avg_duration	=	mean(duration,	na.rm	=	TRUE),
+            std_dev	=	sd(duration,	na.rm=TRUE),		
+            med_freq	=	median(duration,	na.rm=	TRUE),	
+            min	=	min(duration,	na.rm	=	TRUE),
+            max	=	max(duration,	na.rm=TRUE))		
+average_duration7						
+
+#Calculate average age of diagnosis
+yr0 <- subset(yr_dx, year_in_study == 0)
+yr0subjects <- yr0$subject_id
+
+yr1 <- subset(yr_dx, year_in_study == 1)
+unique(yr1$subject_id)
+yr1subjects <- yr1$subject_id
+
+yr2 <- subset(yr_dx, year_in_study == 2 & any == 1)
+unique(yr2$subject_id)
+yr2subjects <- yr2$subject_id
+
+yr3 <- subset(yr_dx, year_in_study == 3 & any == 1)
+unique(yr3$subject_id)
+yr3subjects <- yr3$subject_id
+
+yr4 <- subset(yr_dx, year_in_study == 4 & any == 1)
+unique(yr4$subject_id)
+yr4subjects <- yr4$subject_id
+
+yr5 <- subset(yr_dx, year_in_study == 5 & any == 1)
+unique(yr5$subject_id)
+yr5subjects <- yr5$subject_id
+
+yr6 <- subset(yr_dx, year_in_study == 6 & any == 1)
+unique(yr6$subject_id)
+yr6subjects <- yr6$subject_id
+
+yr7 <- subset(yr_dx, year_in_study == 7 & any == 1)
+unique(yr7$subject_id)
+yr7subjects <- yr7$subject_id
+
+#Average age of diagnosis
+average_age0 <- yr0 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age0
+
+average_age1 <- yr1 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age1
+
+average_age2 <- yr2 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age2
+
+average_age3 <- yr3 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age3
+
+average_age4 <- yr4 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age4
+
+average_age5 <- yr5 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age5
+
+average_age6 <- yr6 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age6
+
+average_age7 <- yr7 %>%
+  group_by(year_in_study) %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_age7
+
+average_ageall <- yr_dx %>%
+  summarise(avg_age = mean(yrs_old, na.rm = TRUE),
+            std_dev = sd(yrs_old, na.rm=TRUE),
+            med_age = median(yrs_old, na.rm= TRUE),
+            min = min(yrs_old, na.rm = TRUE),
+            max = max(yrs_old, na.rm=TRUE))
+
+average_ageall
+
+#The above code represents how the table data was created.
+#It is not all inclusive.  It is meant to show the format and can be adapted for each of the categories.
+
